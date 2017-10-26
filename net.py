@@ -24,11 +24,6 @@ def topology():
     for h in net.hosts:
         print('%s ' % h.name),
 
-    print '*** Adding NAT'
-    
-    nat1=net.addNAT('nat1',ip='10.0.0.254',isNamespace=False)
-    net.addLink(nat1,s1)
-    print " "
 
     print '*** Adding links'
     for h in hosts1:
@@ -38,16 +33,23 @@ def topology():
 
     print " "
 
+    print '*** Adding NAT'
+    
+    nat1=net.addNAT('nat1',ip='10.0.0.254',isNamespace=False)
+    net.addLink(nat1,s1)
+    print " "
+    
     print '*** Starting network'
     net.build()
     s1.start( [c0] )
+    s1.cmd('ovs-vsctl set-manager ptcp:6632')
 
     # print '*** Configuring hosts'
-    for h in net.hosts:
-	h.cmd('sudo ethtool --offload %s-eth0 rx off tx off'%h.name)
+    #for h in net.hosts:
+	    #h.cmd('sudo ethtool --offload %s-eth0 rx off tx off'%h.name)
         #h.cmd('sudo ethtool -K %s-eth0 tso off' % h.name )
         #h.cmd('sudo ethtool -K %s-eth0 gso off' % h.name )
-
+    
     # print '*** Running CLI'
     CLI( net )
 
