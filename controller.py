@@ -17,38 +17,61 @@
 An OpenFlow 1.0 L2 learning switch implementation.
 """
 
-
+import json
 from ryu.base import app_manager
 from ryu.controller import ofp_event
-from ryu.controller.handler import MAIN_DISPATCHER
+from ryu.controller.handler import MAIN_DISPATCHER, DEAD_DISPATCHER, CONFIG_DISPATCHER
 from ryu.controller.handler import set_ev_cls
 from ryu.ofproto import ofproto_v1_0
-from ryu.lib.mac import haddr_to_bin
 from ryu.lib.packet import packet
 from ryu.lib.packet import ethernet
 from ryu.lib.packet import ether_types
-from ryu.app.wsgi import ControllerBase, WSGIApplication, route
-from webob import Response
-from ryu.lib import hub
+from os.path import dirname
+
+ROOT_PATH = dirname(__file__)
+
 
 class SimpleSwitch(app_manager.RyuApp):
     OFP_VERSIONS = [ofproto_v1_0.OFP_VERSION]
 
     def __init__(self, *args, **kwargs):
+        with open(ROOT_PATH + '/subs.json') as f:
+            self.subs = json.load(f)
         super(SimpleSwitch, self).__init__(*args, **kwargs)
         self.mac_to_port = {}
+        self.subs = {"00:00:00:00:00:01": "300000"}
+        self.dst_to_queue = {}
+        self.port_n_queue = {}
+        self.rate_requests = {}
+        self.datapaths = []
+        self.qos = {}
 
-    def add_flow(self, datapath, in_port, dst, actions):
+    @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
+    def _switch_features_handler(self, ev):
+        datapath = ev.msg.datapath
         ofproto = datapath.ofproto
+        parser = datapath.ofproto_parser
 
-        match = datapath.ofproto_parser.OFPMatch(
-            in_port=in_port, dl_dst=haddr_to_bin(dst))
+        # install table-miss flow entry
+        actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER,
+                                          ofproto.OFPCML_NO_BUFFER)]
+        match = parser.OFPMatch()
+        self._add_flow(datapath, match, actions, 1)
+
+        # add resubmit flow
+        inst = [parser.OFPInstructionGotoTable(1)]
+        mod = parser.OFPFlowMod(datapath=datapath, priority=0, match=match,
+                                instructions=inst, table_id=0)
+        datapath.send_msg(mod)
+
+    def add_flow(self, datapath, match, actions, table=0):
+        ofproto = datapath.ofproto
 
         mod = datapath.ofproto_parser.OFPFlowMod(
             datapath=datapath, match=match, cookie=0,
             command=ofproto.OFPFC_ADD, idle_timeout=0, hard_timeout=0,
             priority=ofproto.OFP_DEFAULT_PRIORITY,
-            flags=ofproto.OFPFF_SEND_FLOW_REM, actions=actions)
+            flags=ofproto.OFPFF_SEND_FLOW_REM, actions=actions, table_id=table)
         datapath.send_msg(mod)
 
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
@@ -65,11 +88,13 @@ class SimpleSwitch(app_manager.RyuApp):
             return
         dst = eth.dst
         src = eth.src
+        in_port = msg.in_port
+        parser = datapath.ofproto_parser
 
         dpid = datapath.id
         self.mac_to_port.setdefault(dpid, {})
 
-        self.logger.info("packet in %s %s %s %s", dpid, src, dst, msg.in_port)
+        self.logger.info("packet in %s %s %s %s", dpid, src, dst, in_port)
 
         # learn a mac address to avoid FLOOD next time.
         self.mac_to_port[dpid][src] = msg.in_port
@@ -79,11 +104,12 @@ class SimpleSwitch(app_manager.RyuApp):
         else:
             out_port = ofproto.OFPP_FLOOD
 
-        actions = [datapath.ofproto_parser.OFPActionOutput(out_port)]
+        actions = [datapath.ofproto_parser.OFPActionEnqueue(out_port, 0)]
 
         # install a flow to avoid packet_in next time
         if out_port != ofproto.OFPP_FLOOD:
-            self.add_flow(datapath, msg.in_port, dst, actions)
+            match = parser.OFPMatch(in_port=in_port, eth_src=src, eth_dst=dst)
+            self.add_flow(datapath, match, actions, 1)
 
         data = None
         if msg.buffer_id == ofproto.OFP_NO_BUFFER:
@@ -94,12 +120,31 @@ class SimpleSwitch(app_manager.RyuApp):
             actions=actions, data=data)
         datapath.send_msg(out)
 
-    @set_ev_cls(ofp_event.EventOFPPortStatus, MAIN_DISPATCHER)
+    @set_ev_cls(ofp_event.EventOFPPortStatus, [MAIN_DISPATCHER, DEAD_DISPATCHER])
     def _port_status_handler(self, ev):
         msg = ev.msg
         reason = msg.reason
         port_no = msg.desc.port_no
-
+        datapath = ev.datapath
+        datapath_id = datapath.id
+        if ev.state == MAIN_DISPATCHER:
+            if datapath.id not in self.datapaths:
+                self.datapaths[datapath.id] = datapath
+                self.mac_to_port[datapath_id] = {}
+                self.dst_to_queue[datapath_id] = {}
+                self.port_n_queue[datapath_id] = {}
+                self.rate_requests[datapath_id] = {}
+                self.qos[datapath_id] = {}
+                self.logger.debug('registor datapath %s' % datapath_id)
+        elif ev.state == DEAD_DISPATCHER:
+            if datapath.id in self.datapaths:
+                del self.datapaths[datapath.id]
+                del self.mac_to_port[datapath_id]
+                del self.dst_to_queue[datapath_id]
+                del self.port_n_queue[datapath_id]
+                del self.rate_requests[datapath_id]
+                del self.qos[[datapath_id]]
+                self.logger.debug('unregistor datapath %s' % datapath_id)
         ofproto = msg.datapath.ofproto
         if reason == ofproto.OFPPR_ADD:
             self.logger.info("port added %s", port_no)
