@@ -14,7 +14,7 @@ class Vsctl(object):
         self.ovsdb_addr = ovsdb_addr
 
     def show(self):
-        return self._run_command("show")
+        return self._run_command(["show"])
 
     def add_queue(self,port,queue_id,min_rate,max_rate):
         command = "set port %s qos=@newqos -- --id=@newqos create qos type=linux-htb other-config:max-rate=%s queues:%s=@newqueue -- --id=@newqueue create queue other-config:min-rate=%s"%(port,max_rate,queue_id,min_rate)

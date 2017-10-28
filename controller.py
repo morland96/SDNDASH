@@ -86,11 +86,12 @@ class SimpleSwitch(app_manager.RyuApp):
         else:
             out_port = ofproto.OFPP_FLOOD
 
-        actions = [datapath.ofproto_parser.OFPActionEnqueue(out_port, 0)]
+        #actions = [datapath.ofproto_parser.OFPActionEnqueue(out_port, 0)]
+        actions = [datapath.ofproto_parser.OFPActionOutput(out_port)]
 
         # install a flow to avoid packet_in next time
         if out_port != ofproto.OFPP_FLOOD:
-            match = parser.OFPMatch(in_port=in_port, eth_src=src, eth_dst=dst)
+            match = parser.OFPMatch(in_port=in_port, dl_dst=dst, dl_src=src)
             self.add_flow(datapath, match, actions)
 
         data = None
@@ -102,11 +103,9 @@ class SimpleSwitch(app_manager.RyuApp):
             actions=actions, data=data)
         datapath.send_msg(out)
 
-    @set_ev_cls(ofp_event.EventOFPPortStatus, [MAIN_DISPATCHER, DEAD_DISPATCHER])
-    def _port_status_handler(self, ev):
-        msg = ev.msg
-        reason = msg.reason
-        port_no = msg.desc.port_no
+    @set_ev_cls(ofp_event.EventOFPStateChange,
+                [MAIN_DISPATCHER, DEAD_DISPATCHER])
+    def _state_change_handler(self, ev):
         datapath = ev.datapath
         datapath_id = datapath.id
         if ev.state == MAIN_DISPATCHER:
@@ -127,12 +126,19 @@ class SimpleSwitch(app_manager.RyuApp):
                 del self.rate_requests[datapath_id]
                 del self.qos[[datapath_id]]
                 self.logger.debug('unregistor datapath %s' % datapath_id)
+
+    @set_ev_cls(ofp_event.EventOFPPortStatus, [MAIN_DISPATCHER, DEAD_DISPATCHER])
+    def _port_status_handler(self, ev):
+        msg = ev.msg
+        reason = msg.reason
+        port_no = msg.desc.port_no
+        port_name = msg.desc.name
         ofproto = msg.datapath.ofproto
         if reason == ofproto.OFPPR_ADD:
-            self.logger.info("port added %s", port_no)
+            self.logger.info("port added %s:%s", port_no, port_name)
         elif reason == ofproto.OFPPR_DELETE:
-            self.logger.info("port deleted %s", port_no)
+            self.logger.info("port deleted %s:%s", port_no, port_name)
         elif reason == ofproto.OFPPR_MODIFY:
-            self.logger.info("port modified %s", port_no)
+            self.logger.info("port modified %s:%s", port_no, port_name)
         else:
             self.logger.info("Illeagal port state %s %s", port_no, reason)
