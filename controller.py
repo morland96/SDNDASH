@@ -27,6 +27,7 @@ from ryu.lib.packet import packet
 from ryu.lib.packet import ethernet
 from ryu.lib.packet import ether_types
 from os.path import dirname
+from vsctl import Vsctl
 
 ROOT_PATH = dirname(__file__)
 
@@ -38,15 +39,34 @@ class SimpleSwitch(app_manager.RyuApp):
         with open(ROOT_PATH + '/subs.json') as f:
             self.subs = json.load(f)
         super(SimpleSwitch, self).__init__(*args, **kwargs)
+        self.switch_ctl = Vsctl()
         self.mac_to_port = {}
-        self.subs = {"00:00:00:00:00:01": "300000"}
         self.dst_to_queue = {}
         self.port_n_queue = {}
         self.rate_requests = {}
-        self.datapaths = []
+        self.datapaths = {}
+        self.port_to_name = {}
+        self.wait_port = {}
         self.qos = {}
+        self.default_rate = 10000000
+
+    @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
+    def switch_features_handler(self, ev):
+        msg = ev.msg
+        self.logger.info('OFPSwitchFeatures received: '
+                         'datapath_id=0x%016x n_buffers=%d '
+                         'n_tables=%d capabilities=0x%08x ports=%s',
+                         msg.datapath_id, msg.n_buffers, msg.n_tables,
+                         msg.capabilities, msg.ports)
+        ports = msg.ports
+        datapath_id = msg.datapath_id
+        self.port_to_name.setdefault(datapath_id, {})
+        for port in ports:
+            port = ports[port]
+            self.port_to_name[datapath_id][port.port_no] = port.name
 
     def add_flow(self, datapath, match, actions):
+        """ Add flow with datapath, match, actions """
         ofproto = datapath.ofproto
 
         mod = datapath.ofproto_parser.OFPFlowMod(
@@ -81,18 +101,24 @@ class SimpleSwitch(app_manager.RyuApp):
         # learn a mac address to avoid FLOOD next time.
         self.mac_to_port[dpid][src] = msg.in_port
 
+        actions = None
         if dst in self.mac_to_port[dpid]:
             out_port = self.mac_to_port[dpid][dst]
-        else:
-            out_port = ofproto.OFPP_FLOOD
-
-        #actions = [datapath.ofproto_parser.OFPActionEnqueue(out_port, 0)]
-        actions = [datapath.ofproto_parser.OFPActionOutput(out_port)]
-
-        # install a flow to avoid packet_in next time
-        if out_port != ofproto.OFPP_FLOOD:
+            if dst in self.subs:
+                # When dst needs a queue
+                self.logger.info("add queue")
+                self.switch_ctl.add_queue(
+                    self.port_to_name[dpid][out_port], 0, self.default_rate, self.default_rate)
+                actions = [
+                    datapath.ofproto_parser.OFPActionEnqueue(out_port, 0)]
+            else:
+                actions = [datapath.ofproto_parser.OFPActionOutput(out_port)]
             match = parser.OFPMatch(in_port=in_port, dl_dst=dst, dl_src=src)
             self.add_flow(datapath, match, actions)
+
+        else:
+            actions = [datapath.ofproto_parser.OFPActionOutput(
+                ofproto.OFPP_FLOOD)]
 
         data = None
         if msg.buffer_id == ofproto.OFP_NO_BUFFER:
@@ -116,6 +142,7 @@ class SimpleSwitch(app_manager.RyuApp):
                 self.port_n_queue[datapath_id] = {}
                 self.rate_requests[datapath_id] = {}
                 self.qos[datapath_id] = {}
+                self.port_to_name.setdefault(datapath_id, {})
                 self.logger.debug('registor datapath %s' % datapath_id)
         elif ev.state == DEAD_DISPATCHER:
             if datapath.id in self.datapaths:
@@ -124,7 +151,8 @@ class SimpleSwitch(app_manager.RyuApp):
                 del self.dst_to_queue[datapath_id]
                 del self.port_n_queue[datapath_id]
                 del self.rate_requests[datapath_id]
-                del self.qos[[datapath_id]]
+                del self.qos[datapath_id]
+                del self.port_to_name[datapath_id]
                 self.logger.debug('unregistor datapath %s' % datapath_id)
 
     @set_ev_cls(ofp_event.EventOFPPortStatus, [MAIN_DISPATCHER, DEAD_DISPATCHER])
