@@ -46,31 +46,14 @@ class SimpleSwitch(app_manager.RyuApp):
         self.datapaths = []
         self.qos = {}
 
-    @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
-    def _switch_features_handler(self, ev):
-        datapath = ev.msg.datapath
-        ofproto = datapath.ofproto
-        parser = datapath.ofproto_parser
-
-        # install table-miss flow entry
-        actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER)]
-        match = parser.OFPMatch()
-        self._add_flow(datapath, match, actions, 1)
-
-        # add resubmit flow
-        inst = [parser.OFPInstructionGotoTable(1)]
-        mod = parser.OFPFlowMod(datapath=datapath, priority=0, match=match,
-                                instructions=inst, table_id=0)
-        datapath.send_msg(mod)
-
-    def add_flow(self, datapath, match, actions, table=0):
+    def add_flow(self, datapath, match, actions):
         ofproto = datapath.ofproto
 
         mod = datapath.ofproto_parser.OFPFlowMod(
             datapath=datapath, match=match, cookie=0,
             command=ofproto.OFPFC_ADD, idle_timeout=0, hard_timeout=0,
             priority=ofproto.OFP_DEFAULT_PRIORITY,
-            flags=ofproto.OFPFF_SEND_FLOW_REM, actions=actions, table_id=table)
+            flags=ofproto.OFPFF_SEND_FLOW_REM, actions=actions)
         datapath.send_msg(mod)
 
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
@@ -108,7 +91,7 @@ class SimpleSwitch(app_manager.RyuApp):
         # install a flow to avoid packet_in next time
         if out_port != ofproto.OFPP_FLOOD:
             match = parser.OFPMatch(in_port=in_port, eth_src=src, eth_dst=dst)
-            self.add_flow(datapath, match, actions, 1)
+            self.add_flow(datapath, match, actions)
 
         data = None
         if msg.buffer_id == ofproto.OFP_NO_BUFFER:
