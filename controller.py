@@ -53,8 +53,7 @@ class SimpleSwitch(app_manager.RyuApp):
         parser = datapath.ofproto_parser
 
         # install table-miss flow entry
-        actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER,
-                                          ofproto.OFPCML_NO_BUFFER)]
+        actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER)]
         match = parser.OFPMatch()
         self._add_flow(datapath, match, actions, 1)
 
