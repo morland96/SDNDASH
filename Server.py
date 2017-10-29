@@ -27,6 +27,6 @@ def static_wsgi_app(self, environ, start_response):
 
 
 resource = Resource([
-    ('/', self.static_wsgi_app),
-    ('/data', self.TestApplication)
+    ('/', static_wsgi_app),
+    ('/data', TestApplication)
 ])
