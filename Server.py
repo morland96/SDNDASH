@@ -6,7 +6,10 @@ from controller import SimpleSwitch
 
 class WSGI_SERVER(SimpleSwitch):
     def __init__(self, *args, **kwargs):
-        self.controller = self
+        super(WSGI_SERVER, self).__init__(*args, **kwargs)
+        self.server = WebSocketServer(
+            ('', 8080), resource, debug=True, _logger=self.logger)
+        self.server.serve_forever()
 
 
 class TestApplication(WebSocketApplication):
