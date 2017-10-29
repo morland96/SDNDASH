@@ -33,6 +33,6 @@ class Vsctl(object):
     def _parse_command(self, command):
         return command.split(" ")
 
-    def vsctl_fatal(msg):
+    def vsctl_fatal(self, msg):
         self.logger.error(msg)
         raise Exception(msg)
