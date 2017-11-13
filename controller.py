@@ -65,7 +65,7 @@ class SimpleSwitch(app_manager.RyuApp):
             port = ports[port]
             self.port_to_name[datapath_id][port.port_no] = port.name
 
-    def add_flow(self, datapath, match, actions):
+    def _add_flow(self, datapath, match, actions):
         """ Add flow with datapath, match, actions """
         ofproto = datapath.ofproto
 
@@ -76,6 +76,13 @@ class SimpleSwitch(app_manager.RyuApp):
             flags=ofproto.OFPFF_SEND_FLOW_REM, actions=actions)
         datapath.send_msg(mod)
 
+    def _get_protocols(self,pkt):
+        protocols={}
+        for p in pkt.protocols:
+            if hasattr(p,'protocol_name'):
+                if p.protocol_name == name:
+                    protocols['name'] = p
+        return protocols
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def _packet_in_handler(self, ev):
         msg = ev.msg
@@ -83,7 +90,11 @@ class SimpleSwitch(app_manager.RyuApp):
         ofproto = datapath.ofproto
 
         pkt = packet.Packet(msg.data)
-        eth = pkt.get_protocol(ethernet.ethernet)
+        protocols = self._get_protocols(pkt)
+        p_arp = self.protocols.get("arp",None)
+        p_icmp = self.protocols.get("icmp",None)
+        p_ipv4 = self.protocols.get("ipv4",None)
+        eth=pkt.get_protocol(ethernet.ethernet)
 
         if eth.ethertype == ether_types.ETH_TYPE_LLDP:
             # ignore lldp packet
@@ -114,7 +125,7 @@ class SimpleSwitch(app_manager.RyuApp):
             else:
                 actions = [datapath.ofproto_parser.OFPActionOutput(out_port)]
             match = parser.OFPMatch(in_port=in_port, dl_dst=dst, dl_src=src)
-            self.add_flow(datapath, match, actions)
+            self._add_flow(datapath, match, actions)
 
         else:
             actions = [datapath.ofproto_parser.OFPActionOutput(
