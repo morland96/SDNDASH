@@ -28,6 +28,7 @@ from ryu.lib.packet import ethernet
 from ryu.lib.packet import ether_types
 from os.path import dirname
 from vsctl import Vsctl
+from ryu.lib import hub
 
 ROOT_PATH = dirname(__file__)
 
@@ -46,9 +47,37 @@ class SimpleSwitch(app_manager.RyuApp):
         self.rate_requests = {}
         self.datapaths = {}
         self.port_to_name = {}
-        self.wait_port = {}
-        self.qos = {}
         self.default_rate = 10000000
+        self.interval = 4
+
+        # PANDA part
+        self.bandwidth_history = []
+        self.estimate_bandwidth = []
+        self.smooth_bandwidth = []
+        self.debug_bandwidth = 0
+        self.step = 0
+        self.k = 0.14
+        self.w = 0.3
+        self.interval = 4
+        self.panda_thread = hub.spawn(self.panda)
+
+# PANDA bandwidth estimate:
+    def panda(self):
+        self.logger.info("Start PANDA thread")
+        while 1:
+            hub.sleep(self.interval)
+            self.debug_bandwidth = 100000 + self.step  # TODO: change to real metrics
+            self.bandwidth_history.append(self.debug_bandwidth)
+            if self.step == 0:
+                self.estimate_bandwidth.append(self.bandwidth_history[0])
+            else:
+                self.estimate_bandwidth.append(self.interval * (self.k * self.w - max(
+                    0, self.estimate_bandwidth[self.step - 1] - self.bandwidth_history[self.step - 1])) + self.estimate_bandwidth[self.step - 1])
+
+            self.step += 1
+            if self.logger:
+                self.logger.info("step: %d, bandwidth: %f",
+                                 self.step, self.estimate_bandwidth[-1])
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def switch_features_handler(self, ev):
@@ -65,7 +94,7 @@ class SimpleSwitch(app_manager.RyuApp):
             port = ports[port]
             self.port_to_name[datapath_id][port.port_no] = port.name
 
-    def add_flow(self, datapath, match, actions):
+    def _add_flow(self, datapath, match, actions):
         """ Add flow with datapath, match, actions """
         ofproto = datapath.ofproto
 
@@ -76,6 +105,14 @@ class SimpleSwitch(app_manager.RyuApp):
             flags=ofproto.OFPFF_SEND_FLOW_REM, actions=actions)
         datapath.send_msg(mod)
 
+    def _get_protocols(self, pkt):
+        protocols = {}
+        for p in pkt.protocols:
+            if hasattr(p, 'protocol_name'):
+                if p.protocol_name == name:
+                    protocols['name'] = p
+        return protocols
+
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def _packet_in_handler(self, ev):
         msg = ev.msg
@@ -83,6 +120,10 @@ class SimpleSwitch(app_manager.RyuApp):
         ofproto = datapath.ofproto
 
         pkt = packet.Packet(msg.data)
+        protocols = self._get_protocols(pkt)
+        p_arp = self.protocols.get("arp", None)
+        p_icmp = self.protocols.get("icmp", None)
+        p_ipv4 = self.protocols.get("ipv4", None)
         eth = pkt.get_protocol(ethernet.ethernet)
 
         if eth.ethertype == ether_types.ETH_TYPE_LLDP:
@@ -114,7 +155,7 @@ class SimpleSwitch(app_manager.RyuApp):
             else:
                 actions = [datapath.ofproto_parser.OFPActionOutput(out_port)]
             match = parser.OFPMatch(in_port=in_port, dl_dst=dst, dl_src=src)
-            self.add_flow(datapath, match, actions)
+            self._add_flow(datapath, match, actions)
 
         else:
             actions = [datapath.ofproto_parser.OFPActionOutput(
