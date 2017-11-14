@@ -151,7 +151,7 @@ class SimpleSwitch(app_manager.RyuApp):
                 self.switch_ctl.add_queue(
                     self.port_to_name[dpid][out_port], 0, self.default_rate, self.default_rate)
                 actions = [
-                    datapath.ofproto_parser.OFPActionEnqueue(out_port, 0)]
+                    datapath.ofproto_parser.OFPActionEnqueue(out_port, 1)]
             else:
                 actions = [datapath.ofproto_parser.OFPActionOutput(out_port)]
             match = parser.OFPMatch(in_port=in_port, dl_dst=dst, dl_src=src)
