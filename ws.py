@@ -1,5 +1,7 @@
 import json
 import logging
+import threading
+import time
 
 from controller import SimpleSwitch
 from webob import Response
@@ -11,6 +13,7 @@ from ryu.lib import dpid as dpid_lib
 from ryu.lib import hub
 from uuid import uuid1
 import numpy as np
+
 
 simple_switch_instance_name = 'simple_switch_api_app'
 
@@ -87,6 +90,8 @@ class SimpleSwitchRest(SimpleSwitch):
         throughput = metrics['throughput']
         buffer_level = metrics['buffer_level']
         current_level = metrics['current_level']
+        throughput = throughput if throughput else 0
+        buffer_level = buffer_level if buffer_level else 0
         # fill information
         self.client_to_history[ip]['throughput'].append(throughput)
         self.client_to_history[ip]['buffer_level'].append(buffer_level)
@@ -94,7 +99,7 @@ class SimpleSwitchRest(SimpleSwitch):
         self.logger.info("Ask for get_max_quality")
         self.client_to_history[ip]['current_quality'].append(
             self.client_to_qualitylist[ip][current_level])
-        self.allow_bandwidth[ip] = throughput * 1000 # TODO: Change to PANDA
+        self.allow_bandwidth[ip] = throughput * 1000  # TODO: Change to PANDA
         # self.logger.info(self.client_to_history[ip])
         index, QoE = self.get_max_qoe(ip)
         self.logger.info("Next index %d with QoE: %f" % (index, QoE))
@@ -103,8 +108,11 @@ class SimpleSwitchRest(SimpleSwitch):
 
     @rpc_public
     def register_client(self, ip, quality_list, bitrate_list):
+        quality = []
+        for q in quality_list:
+            quality.append(q * 5)
         self.clients.append(ip)
-        self.client_to_qualitylist[ip] = quality_list
+        self.client_to_qualitylist[ip] = quality
         self.client_to_bitratelist[ip] = bitrate_list
         self.client_to_history[ip] = {}
         self.client_to_history[ip]['throughput'] = []
@@ -116,7 +124,6 @@ class SimpleSwitchRest(SimpleSwitch):
         self.DC[ip] = 3500000000000000
         self.allow_bandwidth[ip] = self.max_bandwidth
         self.logger.info(ip + " just been registered.")
-        self.logger.info(bitrate_list)
         return ip
 
     def get_max_qoe(self, ip):
@@ -129,7 +136,7 @@ class SimpleSwitchRest(SimpleSwitch):
         for Qi in self.client_to_qualitylist[ip]:
             TQavg = (TQsum + Qi) / (num + 1)
             SQavg = (SQsum + np.abs(Qi - quality[-1])) / num
-            QoE_list.append((TQavg - SQavg) / 2)
+            QoE_list.append((TQavg - SQavg) / 4)
 
         index_QoE = np.argsort(QoE_list)[::-1]
         self.logger.info(QoE_list)
@@ -137,7 +144,8 @@ class SimpleSwitchRest(SimpleSwitch):
         bitrate_sum = 0
         for c_ip in self.clients:
             if c_ip != ip:
-                bitrate_sum += self.client_to_bitratelist[c_ip][self.client_to_history[c_ip]['current_level']].bitrate
+                bitrate_sum += self.client_to_bitratelist[c_ip][self.client_to_history[c_ip]
+                                                                ['current_level']].bitrate
         # Check best choice
         for i in range(len(QoE_list)):
             i = index_QoE[i]
@@ -145,13 +153,10 @@ class SimpleSwitchRest(SimpleSwitch):
             if (bitrate_sum + bitrate) < self.max_bandwidth:
                 if bitrate < self.allow_bandwidth[ip]:
                     buffer = self.client_to_history[ip]['buffer_level'][-1]
-                    if buffer > self.min_buffer:
-                        # TODO: ADD DC & CT
-                        return i, QoE_list[i]
+                    # if buffer > self.min_buffer:
+                    # TODO: ADD DC & CT
+                    return i, QoE_list[i]
         return 0, QoE_list[0]
-
-    def map_video_quality(self, bandwidth):
-        pass
 
 
 class SimpleSwitchController(ControllerBase):
@@ -183,3 +188,5 @@ class SimpleSwitchController(ControllerBase):
         simple_switch.logger.info("WebSocket connected: %s", ws)
         rpc_server = WebSocketRPCServer(ws, simple_switch)
         rpc_server.serve_forever()
+
+
